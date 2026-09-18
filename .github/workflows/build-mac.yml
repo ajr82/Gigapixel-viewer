@@ -1,0 +1,45 @@
+name: Build macOS App
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch: # Allows you to run it manually from the Actions tab
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11' 
+
+    - name: Install OpenSlide
+      run: brew install openslide
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
+
+    - name: Build with PyInstaller
+      run: |
+        # Replace 'main.py' with your actual primary script if named differently
+        pyinstaller --windowed --noconfirm --name "GigapixelViewer" main.py
+
+    - name: Package into DMG
+      run: |
+        cd dist
+        # Uses macOS native hdiutil to create a compressed disk image
+        hdiutil create -volname "GigapixelViewer" -srcfolder "GigapixelViewer.app" -ov -format UDZO GigapixelViewer-Mac.dmg
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: GigapixelViewer-Mac
+        path: dist/GigapixelViewer-Mac.dmg
