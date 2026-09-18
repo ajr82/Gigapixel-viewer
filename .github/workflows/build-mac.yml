@@ -30,7 +30,7 @@ jobs:
     - name: Build with PyInstaller
       run: |
         # Replace 'main.py' with your actual primary script if named differently
-        pyinstaller --windowed --noconfirm --name "GigapixelViewer" main.py
+        pyinstaller --windowed --noconfirm --name "GigapixelViewer" viewer.py
 
     - name: Package into DMG
       run: |
