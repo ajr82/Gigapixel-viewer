@@ -1,0 +1,7 @@
+tifffile
+zarr
+imagecodecs
+PyQt6
+PyQt6-WebEngine
+openslide-python
+openslide-bin
