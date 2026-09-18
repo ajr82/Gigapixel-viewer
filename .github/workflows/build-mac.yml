@@ -18,14 +18,12 @@ jobs:
       with:
         python-version: '3.11' 
 
-    - name: Install OpenSlide
-      run: brew install openslide
-
     - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        pip install pyinstaller imagecodecs tifffile zarr numcodecs
+        # Added openslide-bin here to get the native Mac binaries
+        pip install pyinstaller imagecodecs tifffile zarr numcodecs openslide-bin
 
     - name: Build with PyInstaller
       run: |
@@ -36,6 +34,8 @@ jobs:
         --hidden-import=numcodecs \
         --collect-all=imagecodecs \
         --collect-all=zarr \
+        --collect-all=openslide \
+        --collect-all=openslide_bin \
         viewer.py
 
     - name: Package into DMG
