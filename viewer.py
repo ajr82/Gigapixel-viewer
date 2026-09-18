@@ -736,6 +736,7 @@ class ServerThread(QThread):
         super().__init__()
         self.port = port
         self.server = None
+        self.is_ready = threading.Event()
         
     def run(self):
         max_attempts = 10
@@ -744,6 +745,7 @@ class ServerThread(QThread):
                 self.server = TileServer(('127.0.0.1', p), TileRequestHandler)
                 self.port = p
                 print(f"Started internal tile server on port {self.port}")
+                self.is_ready.set()
                 self.server.serve_forever()
                 break
             except OSError as e:
@@ -760,6 +762,8 @@ class ServerThread(QThread):
             self.server.server_close()
 
     def load_slide(self, path):
+        self.is_ready.wait(timeout=3.0)
+        
         if self.server:
             return self.server.set_slide(path)
         return False
@@ -780,6 +784,29 @@ class SlideOpenerThread(QThread):
             print(f"Error opening slide in background: {e}")
         self.finished.emit(success, self.filepath)
 
+class ViewerWebEngineView(QWebEngineView):
+    """Custom WebEngineView to intercept drops before Chromium consumes them."""
+    def __init__(self, main_window):
+        super().__init__()
+        self.main_window = main_window
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.accept()
+        else:
+            super().dragEnterEvent(event)
+            
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.accept()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        if event.mimeData().hasUrls():
+            self.main_window.dropEvent(event)
+        else:
+            super().dropEvent(event)
 
 # ---------------------------------------------------------
 # 3. GUI Layout & Actions Integration
@@ -788,7 +815,6 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         
-        # 1. NEW: Enable drag and drop functionality on the main window
         self.setAcceptDrops(True)
         
         self.setWindowTitle("Gigapixel viewer")
@@ -871,7 +897,7 @@ class MainWindow(QMainWindow):
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
         
-        self.viewer_web = QWebEngineView()
+        self.viewer_web = ViewerWebEngineView(self)
         right_layout.addWidget(self.viewer_web)
         
         self.splitter.addWidget(left_panel)
@@ -885,7 +911,6 @@ class MainWindow(QMainWindow):
         
         self.load_viewer_page()
 
-    # --- NEW: Drag and Drop Methods ---
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
             event.accept()
@@ -899,14 +924,12 @@ class MainWindow(QMainWindow):
                 self.load_directory(path)
                 return
             elif os.path.isfile(path):
-                # Check for supported extensions, including compound extensions like .ome.tif
                 ext = Path(path).suffix.lower()
                 if path.lower().endswith('.ome.tif'):
                     ext = '.ome.tif'
                 if ext in self.supported_exts:
                     self.add_single_file(path)
                     return
-    # -----------------------------------
 
     def open_settings(self):
         if not hasattr(self, 'settings_dialog'):
@@ -1090,8 +1113,6 @@ def main():
     window = MainWindow()
     window.show()
 
-    # 2. NEW: "Open With..." CLI argument parsing
-    # Automatically load a file or directory if it was passed via command line
     if len(sys.argv) > 1:
         filepath = sys.argv[1]
         if os.path.exists(filepath):
