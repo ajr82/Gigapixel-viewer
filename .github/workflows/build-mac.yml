@@ -32,7 +32,6 @@ jobs:
       run: |
         pyinstaller --name "Gigapixel Viewer" \
         --windowed \
-        --icon=NONE \
         --add-data "openslide_mac_bin:openslide_mac_bin" \
         --hidden-import imagecodecs \
         --hidden-import tifffile \
