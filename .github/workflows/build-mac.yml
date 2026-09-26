@@ -3,7 +3,7 @@ name: Build Mac DMG
 on:
   push:
     branches: [ main ]
-  workflow_dispatch: # Allows you to run this manually from the Actions tab
+  workflow_dispatch: 
 
 jobs:
   build-mac:
@@ -11,10 +11,10 @@ jobs:
 
     steps:
     - name: Checkout Code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
 
@@ -44,11 +44,10 @@ jobs:
 
     - name: Create DMG Disk Image
       run: |
-        # Use macOS's built-in hdiutil to create a highly compatible DMG package
         hdiutil create -volname "Gigapixel Viewer" -srcfolder "dist/Gigapixel Viewer.app" -ov -format UDZO GigapixelViewer-Mac.dmg
 
     - name: Upload Artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: GigapixelViewer-Mac-DMG
         path: GigapixelViewer-Mac.dmg
