@@ -6,7 +6,6 @@ import mimetypes
 from pathlib import Path
 
 try:
-    # Use ThreadingHTTPServer to load tiles simultaneously for massive speed improvements
     from http.server import ThreadingHTTPServer as ServerBase
 except ImportError:
     from http.server import HTTPServer as ServerBase
@@ -26,7 +25,6 @@ try:
 except ImportError:
     HAS_TIFFFILE = False
     print("Warning: tifffile or zarr not installed. OME-TIFF fallback will be disabled.")
-    print("To enable OME-TIFF support: pip install tifffile zarr imagecodecs")
 
 # Checking for required libraries
 try:
@@ -36,36 +34,62 @@ try:
         QToolBar, QStatusBar, QMessageBox, QProgressDialog, QDialog,
         QFormLayout, QLineEdit, QPushButton, QComboBox, QSlider
     )
-    from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QObject, QThread
+    from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QObject, QThread, QEvent
     from PyQt6.QtGui import QIcon, QPixmap, QImage, QColor, QFont, QPainter
     from PyQt6.QtWebEngineWidgets import QWebEngineView
     from PyQt6.QtWebEngineCore import QWebEnginePage
 except ImportError:
     print("Error: PyQt6 or PyQt6-WebEngine is not installed.")
-    print("Please install them using: pip install PyQt6 PyQt6-WebEngine")
     sys.exit(1)
 
-# --- OPENSLIDE BINARY SETUP FOR WINDOWS ---
-if hasattr(os, 'add_dll_directory'):
-    openslide_bin_path = r"C:\openslide-win64\bin" 
+# --- OPENSLIDE BINARY SETUP (CROSS-PLATFORM) ---
+if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+    base_path = sys._MEIPASS
+else:
+    base_path = os.path.dirname(os.path.abspath(__file__))
+
+# 1. WINDOWS DLL LOADING
+if os.name == 'nt' and hasattr(os, 'add_dll_directory'):
     env_path = os.environ.get('OPENSLIDE_PATH')
-    
+    possible_paths = [
+        os.path.join(base_path, 'openslide-win64', 'bin'),
+        os.path.join(base_path, 'openslide', 'bin'),
+        os.path.join(base_path, 'bin')
+    ]
     try:
+        dll_added = False
         if env_path and os.path.exists(env_path):
             os.add_dll_directory(env_path)
-        elif os.path.exists(openslide_bin_path):
-            os.add_dll_directory(openslide_bin_path)
+            dll_added = True
+        else:
+            for p in possible_paths:
+                if os.path.exists(p):
+                    os.add_dll_directory(p)
+                    dll_added = True
+                    break
     except Exception as e:
         print(f"Warning: Failed to add DLL directory: {e}")
-# ------------------------------------------
+
+# 2. MACOS DYLIB PRE-LOADING
+elif sys.platform == 'darwin':
+    # This path matches the extraction directory defined in the GitHub Action below
+    mac_bin_path = os.path.join(base_path, 'openslide_mac_bin', 'lib')
+    if os.path.exists(mac_bin_path):
+        os.environ['DYLD_LIBRARY_PATH'] = mac_bin_path + os.pathsep + os.environ.get('DYLD_LIBRARY_PATH', '')
+        try:
+            import ctypes
+            # Force the OS to load the dylib into memory so OpenSlide's find_library hook catches it
+            dylib_path = os.path.join(mac_bin_path, 'libopenslide.0.dylib')
+            if os.path.exists(dylib_path):
+                ctypes.cdll.LoadLibrary(dylib_path)
+        except Exception as e:
+            print(f"Mac OpenSlide Preload Warning: {e}")
+# ------------------------------------------------
 
 try:
     import openslide
 except ImportError as e:
     print(f"Error: OpenSlide is not installed or could not be loaded ({e}).")
-    print("Please install it using: pip install openslide-python")
-    print("You also need the OpenSlide C library installed on your system.")
-    print("See: https://openslide.org/download/")
     sys.exit(1)
 
 
@@ -144,7 +168,6 @@ class TiffSlideFallback:
         self.series = self.tif.series[0]
         self.axes = self.series.axes
         
-        # Extract associated macro/label images if present in secondary OME-TIFF series
         self.associated_images = {}
         for i in range(1, len(self.tif.series)):
             try:
@@ -206,7 +229,6 @@ class TiffSlideFallback:
         if w_safe <= 0 or h_safe <= 0:
             return Image.new('RGB', size, (255, 255, 255))
             
-        # Memory Safety Stride for Navigator Requests
         step = 1
         max_dim = 2048
         if w_safe > max_dim or h_safe > max_dim:
@@ -271,7 +293,6 @@ class TileServer(ServerBase):
         self.slide = None
         self.slide_path = None
         self.osr_config = {}
-        
         self.slide_lock = threading.Lock()
         self.active_readers = 0
         self.close_condition = threading.Condition(self.slide_lock)
@@ -357,12 +378,7 @@ class TileRequestHandler(BaseHTTPRequestHandler):
             else:
                 self.send_error(404, "File not found")
         except Exception as e:
-            print(f"Error handling request {self.path}: {e}")
-            traceback.print_exc()
-            try:
-                self.send_error(500, f"Internal Server Error: {str(e)}")
-            except:
-                pass
+            pass
                 
     def log_message(self, format, *args):
         pass
@@ -596,7 +612,6 @@ class TileRequestHandler(BaseHTTPRequestHandler):
                 elif 'macro' in slide.associated_images:
                     img = slide.associated_images['macro']
             
-            # Fallback if no label is found
             if not img:
                 img = Image.new('RGB', (200, 100), (240, 240, 240))
                 d = ImageDraw.Draw(img)
@@ -616,7 +631,6 @@ class TileRequestHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(img_io.getvalue())
         except Exception as e:
-            print(f"Error serving label: {e}")
             self.send_error(500, "Error generating label")
         finally:
             with self.server.slide_lock:
@@ -721,10 +735,7 @@ class TileRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(img_io.getvalue())
             
         except Exception as e:
-            import traceback
-            print(f"Error serving tile {level}/{col}_{row}: {e}")
-            traceback.print_exc()
-            self.send_error(500, "Error generating tile")
+            pass
         finally:
             with self.server.slide_lock:
                 self.server.active_readers -= 1
@@ -750,10 +761,8 @@ class ServerThread(QThread):
                 break
             except OSError as e:
                 if e.errno == 98 or e.errno == 10048: 
-                    print(f"Port {p} in use, trying next...")
                     continue
                 else:
-                    print(f"Error starting server: {e}")
                     break
                     
     def stop(self):
@@ -763,7 +772,6 @@ class ServerThread(QThread):
 
     def load_slide(self, path):
         self.is_ready.wait(timeout=3.0)
-        
         if self.server:
             return self.server.set_slide(path)
         return False
@@ -781,11 +789,10 @@ class SlideOpenerThread(QThread):
         try:
             success = self.server_thread.load_slide(self.filepath)
         except Exception as e:
-            print(f"Error opening slide in background: {e}")
+            pass
         self.finished.emit(success, self.filepath)
 
 class ViewerWebEngineView(QWebEngineView):
-    """Custom WebEngineView to intercept drops before Chromium consumes them."""
     def __init__(self, main_window):
         super().__init__()
         self.main_window = main_window
@@ -807,6 +814,18 @@ class ViewerWebEngineView(QWebEngineView):
             self.main_window.dropEvent(event)
         else:
             super().dropEvent(event)
+
+# --- MACOS EVENT INTERCEPTOR ---
+class ViewerApplication(QApplication):
+    """Custom QApplication to intercept macOS native OpenWith / Drag-to-Dock events."""
+    file_opened = pyqtSignal(str)
+
+    def event(self, event):
+        if event.type() == QEvent.Type.FileOpen:
+            self.file_opened.emit(event.file())
+            return True
+        return super().event(event)
+
 
 # ---------------------------------------------------------
 # 3. GUI Layout & Actions Integration
@@ -1037,7 +1056,7 @@ class MainWindow(QMainWindow):
             self.statusBar.showMessage(f"Loaded {Path(filepath).name}")
         else:
             self.statusBar.showMessage(f"Failed to load {Path(filepath).name}")
-            QMessageBox.warning(self, "Error", f"Failed to open image:\n{filepath}\n\nIt might be corrupted or unsupported by your OpenSlide installation.")
+            QMessageBox.warning(self, "Error", f"Failed to open image:\n{filepath}\n\nIt might be corrupted or unsupported.")
 
     def closeEvent(self, event):
         if self.server_thread:
@@ -1047,79 +1066,41 @@ class MainWindow(QMainWindow):
 
 
 def main():
-    app = QApplication(sys.argv)
+    app = ViewerApplication(sys.argv)
     app.setStyle("Fusion")
     
     style = """
-    QMainWindow {
-        background-color: #f8fafc;
-    }
-    QListWidget {
-        background-color: #ffffff;
-        border: 1px solid #cbd5e1;
-        border-radius: 6px;
-        outline: none;
-        font-size: 14px;
-        color: #334155;
-    }
-    QListWidget::item {
-        border-bottom: 1px solid #f1f5f9;
-        padding: 10px 4px;
-    }
-    QListWidget::item:selected {
-        background-color: #e0f2fe;
-        color: #0284c7;
-        font-weight: bold;
-        border-radius: 4px;
-    }
-    QListWidget::item:hover:!selected {
-        background-color: #f1f5f9;
-        border-radius: 4px;
-    }
-    QToolBar {
-        background-color: #ffffff;
-        border-bottom: 1px solid #e2e8f0;
-        padding: 8px;
-        spacing: 10px;
-    }
-    QToolButton {
-        background-color: #f8fafc;
-        border: 1px solid #cbd5e1;
-        border-radius: 6px;
-        padding: 6px 12px;
-        font-size: 13px;
-        font-weight: 600;
-        color: #475569;
-    }
-    QToolButton:hover {
-        background-color: #e2e8f0;
-        color: #0f172a;
-    }
-    QToolButton:pressed {
-        background-color: #cbd5e1;
-    }
-    QSplitter::handle {
-        background-color: #e2e8f0;
-        width: 2px;
-    }
-    QStatusBar {
-        background-color: #ffffff;
-        color: #64748b;
-        border-top: 1px solid #e2e8f0;
-    }
+    QMainWindow { background-color: #f8fafc; }
+    QListWidget { background-color: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; outline: none; font-size: 14px; color: #334155; }
+    QListWidget::item { border-bottom: 1px solid #f1f5f9; padding: 10px 4px; }
+    QListWidget::item:selected { background-color: #e0f2fe; color: #0284c7; font-weight: bold; border-radius: 4px; }
+    QListWidget::item:hover:!selected { background-color: #f1f5f9; border-radius: 4px; }
+    QToolBar { background-color: #ffffff; border-bottom: 1px solid #e2e8f0; padding: 8px; spacing: 10px; }
+    QToolButton { background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 6px 12px; font-size: 13px; font-weight: 600; color: #475569; }
+    QToolButton:hover { background-color: #e2e8f0; color: #0f172a; }
+    QToolButton:pressed { background-color: #cbd5e1; }
+    QSplitter::handle { background-color: #e2e8f0; width: 2px; }
+    QStatusBar { background-color: #ffffff; color: #64748b; border-top: 1px solid #e2e8f0; }
     """
     app.setStyleSheet(style)
     
     window = MainWindow()
     window.show()
 
-    if len(sys.argv) > 1:
-        filepath = sys.argv[1]
+    # Route macOS FileOpen events directly to the window logic
+    def handle_mac_open(filepath):
         if os.path.exists(filepath):
             if os.path.isdir(filepath):
                 window.load_directory(filepath)
             else:
                 window.add_single_file(filepath)
+                
+    app.file_opened.connect(handle_mac_open)
+
+    # Standard sys.argv handler for terminal executions / Windows
+    if len(sys.argv) > 1:
+        filepath = sys.argv[1]
+        handle_mac_open(filepath)
     
     sys.exit(app.exec())
 
