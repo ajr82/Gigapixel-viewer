@@ -1,50 +1,54 @@
-name: Build macOS App
+name: Build Mac DMG
 
 on:
   push:
-    branches: [ "main" ]
-  workflow_dispatch:
+    branches: [ main ]
+  workflow_dispatch: # Allows you to run this manually from the Actions tab
 
 jobs:
-  build:
+  build-mac:
     runs-on: macos-latest
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+    - name: Checkout Code
+      uses: actions/checkout@v3
 
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v4
       with:
-        python-version: '3.11' 
+        python-version: '3.11'
 
-    - name: Install Python dependencies
+    - name: Install Python Dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        # Added openslide-bin here to get the native Mac binaries
-        pip install pyinstaller imagecodecs tifffile zarr numcodecs openslide-bin
+        pip install PyQt6 PyQt6-WebEngine openslide-python tifffile zarr imagecodecs Pillow pyinstaller
 
-    - name: Build with PyInstaller
+    - name: Extract OpenSlide Binary
       run: |
-        pyinstaller --windowed --noconfirm --name "GigapixelViewer" \
-        --hidden-import=imagecodecs \
-        --hidden-import=tifffile \
-        --hidden-import=zarr \
-        --hidden-import=numcodecs \
-        --collect-all=imagecodecs \
-        --collect-all=zarr \
-        --collect-all=openslide \
-        --collect-all=openslide_bin \
+        mkdir openslide_mac_bin
+        tar -xf openslide-bin-4.0.1.2-macos-arm64-x86_64.tar.xz -C openslide_mac_bin --strip-components=1
+
+    - name: Build Application with PyInstaller
+      run: |
+        pyinstaller --name "Gigapixel Viewer" \
+        --windowed \
+        --icon=NONE \
+        --add-data "openslide_mac_bin:openslide_mac_bin" \
+        --hidden-import imagecodecs \
+        --hidden-import tifffile \
+        --hidden-import zarr \
+        --hidden-import numcodecs \
+        --collect-all imagecodecs \
+        --collect-all zarr \
         viewer.py
 
-    - name: Package into DMG
+    - name: Create DMG Disk Image
       run: |
-        cd dist
-        hdiutil create -volname "GigapixelViewer" -srcfolder "GigapixelViewer.app" -ov -format UDZO GigapixelViewer-Mac.dmg
+        # Use macOS's built-in hdiutil to create a highly compatible DMG package
+        hdiutil create -volname "Gigapixel Viewer" -srcfolder "dist/Gigapixel Viewer.app" -ov -format UDZO GigapixelViewer-Mac.dmg
 
     - name: Upload Artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v3
       with:
-        name: GigapixelViewer-Mac
-        path: dist/GigapixelViewer-Mac.dmg
+        name: GigapixelViewer-Mac-DMG
+        path: GigapixelViewer-Mac.dmg
